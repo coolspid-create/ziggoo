@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ZIGGOO Dashboard</title>
+    <link rel="stylesheet" href="/assets/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="brand">ZIGGOO</p>
+          <h1>리콜 위해제품 모니터링</h1>
+          <p id="resultTimestamp" class="topbar-meta">최근 결과 없음</p>
+        </div>
+        <div class="topbar-actions">
+          <span id="serverState" class="state-pill" aria-live="polite">대기</span>
+          <a class="button" href="/image-search">이미지 검색</a>
+          <button id="refreshButton" class="button" type="button">새로고침</button>
+        </div>
+      </header>
+
+      <section class="recall-workflow" aria-label="Recall Hub">
+        <div class="section-header">
+          <div>
+            <h2>리콜 조회</h2>
+            <p>
+              <span id="recallLoadedCount">0건</span>
+              <span id="recallFreshness" class="recall-freshness">불러오기 전</span>
+            </p>
+          </div>
+          <span class="section-badge">Recall Hub</span>
+        </div>
+
+        <form id="recallForm" class="recall-form">
+          <label class="wide-field">
+            <span>API 키</span>
+            <input id="apiKeyInput" name="api_key" type="password" autocomplete="off" placeholder="비워두면 저장된 키 사용" />
+          </label>
+          <label>
+            <span>조회</span>
+            <select id="recallModeInput" name="mode">
+              <option value="recent">최근 리콜</option>
+              <option value="list">조건 검색</option>
+            </select>
+          </label>
+          <label class="wide-field">
+            <span>검색어</span>
+            <input id="recallSearchInput" name="q" autocomplete="off" placeholder="제품명, 브랜드, 위해 유형" />
+          </label>
+          <label>
+            <span>출처</span>
+            <select id="sourceInput" name="source">
+              <option value="">전체</option>
+              <option value="US_CPSC">US CPSC</option>
+              <option value="EU">EU</option>
+              <option value="OECD">OECD</option>
+              <option value="JP_METI">JP METI</option>
+              <option value="CA">CA</option>
+              <option value="AU">AU</option>
+              <option value="NZ">NZ</option>
+            </select>
+          </label>
+          <label>
+            <span>위험도</span>
+            <select id="riskInput" name="risk_bucket">
+              <option value="">전체</option>
+              <option value="serious">높음</option>
+              <option value="moderate">보통</option>
+              <option value="low">낮음</option>
+            </select>
+          </label>
+          <label>
+            <span>국내 관련</span>
+            <select id="koreaInput" name="korea_relevance">
+              <option value="">전체</option>
+              <option value="true">관련</option>
+              <option value="false">미관련</option>
+            </select>
+          </label>
+          <label>
+            <span>기간</span>
+            <input id="daysInput" name="days" type="number" min="1" max="365" value="30" />
+          </label>
+          <label>
+            <span>개수</span>
+            <input id="recallLimitInput" name="limit" type="number" min="1" max="100" value="30" />
+          </label>
+          <button id="loadRecallsButton" class="button primary" type="submit">불러오기</button>
+        </form>
+
+        <div class="selection-bar">
+          <div class="selection-summary">
+            <strong id="selectedRecallCount">0</strong>
+            <span>선택됨</span>
+          </div>
+          <button id="selectVisibleButton" class="button" type="button">전체 선택</button>
+          <button id="clearSelectionButton" class="button" type="button">선택 해제</button>
+          <label>
+            <span>스캔 플랫폼</span>
+            <select id="recallScanPlatformInput">
+              <option value="">전체</option>
+              <option value="coupang">쿠팡</option>
+              <option value="elevenst">11번가 아마존</option>
+              <option value="gmarket">G마켓</option>
+            </select>
+          </label>
+          <label>
+            <span>상품 확인</span>
+            <input id="recallScanMaxInput" type="number" min="1" max="80" value="20" />
+          </label>
+          <label class="checkbox-field">
+            <input id="recallManualVerifyInput" type="checkbox" />
+            <span>차단 시 수동 검증</span>
+          </label>
+          <button id="scanSelectedButton" class="button primary" type="button">선택 스캔</button>
+        </div>
+
+        <div id="scanProgress" class="scan-progress" aria-live="polite" hidden>
+          <div class="scan-progress-header">
+            <strong id="scanProgressTitle">선택 스캔 준비 중</strong>
+            <span id="scanProgressCount">0 / 0</span>
+          </div>
+          <div class="scan-progress-track" aria-hidden="true">
+            <div id="scanProgressBar" class="scan-progress-bar"></div>
+          </div>
+          <div id="scanProgressDetail" class="scan-progress-detail"></div>
+        </div>
+
+        <div id="recallList" class="recall-list"></div>
+        <div id="recallEmptyState" class="empty-state" hidden>불러온 리콜이 없습니다.</div>
+      </section>
+
+      <section class="scan-band" aria-label="직접 스캔">
+        <div class="section-header compact">
+          <div>
+            <h2>직접 스캔</h2>
+            <p>단일 검색</p>
+          </div>
+        </div>
+        <form id="scanForm" class="scan-form">
+          <label>
+            <span>직접 검색어</span>
+            <input id="keywordInput" name="keyword" autocomplete="off" placeholder="모델명 또는 제품명" />
+          </label>
+          <label>
+            <span>검증어</span>
+            <input id="verifyInput" name="verify" autocomplete="off" placeholder="브랜드, 제조사" />
+          </label>
+          <label>
+            <span>플랫폼</span>
+            <select id="scanPlatformInput" name="platform">
+              <option value="">전체</option>
+              <option value="coupang">쿠팡</option>
+              <option value="elevenst">11번가 아마존</option>
+              <option value="gmarket">G마켓</option>
+            </select>
+          </label>
+          <label class="compact-field">
+            <span>개수</span>
+            <input id="maxItemsInput" name="max_items" type="number" min="1" max="80" value="20" />
+          </label>
+          <label class="checkbox-field">
+            <input id="manualVerifyInput" type="checkbox" />
+            <span>차단 시 수동 검증</span>
+          </label>
+          <button id="runButton" class="button primary" type="submit">실행</button>
+        </form>
+        <pre id="runLog" class="run-log" hidden></pre>
+      </section>
+
+      <section class="metrics" aria-label="요약">
+        <div class="metric">
+          <span>스캔</span>
+          <strong id="metricScans">0</strong>
+        </div>
+        <div class="metric positive">
+          <span>탐지</span>
+          <strong id="metricMatched">0</strong>
+        </div>
+        <div class="metric">
+          <span>상품</span>
+          <strong id="metricProducts">0</strong>
+        </div>
+        <div class="metric warning">
+          <span>확인 필요</span>
+          <strong id="metricAttention">0</strong>
+        </div>
+      </section>
+
+      <section id="resultInsight" class="result-insight" aria-live="polite"></section>
+
+      <section class="toolbar" aria-label="결과 필터">
+        <label>
+          <span>결과 파일</span>
+          <select id="resultFileSelect"></select>
+        </label>
+        <label>
+          <span>검색</span>
+          <input id="tableSearchInput" autocomplete="off" placeholder="검색어, 검증어, 플랫폼" />
+        </label>
+        <label>
+          <span>상태</span>
+          <select id="statusFilter">
+            <option value="">전체</option>
+            <option value="matched">탐지</option>
+            <option value="no_match">미탐지</option>
+            <option value="manual_required">수동 필요</option>
+            <option value="blocked">차단</option>
+            <option value="error">오류</option>
+          </select>
+        </label>
+        <label>
+          <span>플랫폼</span>
+          <select id="platformFilter">
+            <option value="">전체</option>
+          </select>
+        </label>
+        <div class="download-actions" aria-label="결과 다운로드">
+          <span id="filteredResultCount" class="filtered-count">0건 표시</span>
+          <button id="downloadJsonButton" class="button" type="button">JSON 다운로드</button>
+          <button id="downloadExcelButton" class="button primary" type="button">엑셀 다운로드</button>
+        </div>
+      </section>
+
+      <main class="content-grid">
+        <section class="table-panel" aria-label="스캔 결과">
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>상태</th>
+                  <th>플랫폼</th>
+                  <th>검색어</th>
+                  <th>검증어</th>
+                  <th>탐지 상품</th>
+                  <th>시각</th>
+                </tr>
+              </thead>
+              <tbody id="resultTableBody"></tbody>
+            </table>
+          </div>
+          <div id="emptyState" class="empty-state" hidden>표시할 결과가 없습니다.</div>
+        </section>
+
+        <aside id="detailPanel" class="detail-panel" aria-label="상세">
+          <div class="detail-empty">결과 행을 선택하세요.</div>
+        </aside>
+      </main>
+    </div>
+
+    <script src="/assets/app.js"></script>
+  </body>
+</html>

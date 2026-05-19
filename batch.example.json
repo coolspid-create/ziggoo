@@ -1,0 +1,10 @@
+[
+  {
+    "query": "ABC-123",
+    "verify": "BrandName",
+    "model_name": "ABC-123",
+    "source_id": "sample-1"
+  },
+  "XYZ-900"
+]
+

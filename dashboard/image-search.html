@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ZIGGOO Image Search</title>
+    <link rel="stylesheet" href="/assets/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell image-search-shell">
+      <header class="topbar">
+          <div>
+          <p class="brand">ZIGGOO</p>
+          <h1>Google Lens 이미지 검증</h1>
+          <p id="imageSearchState" class="topbar-meta">Lens 검색 검증 대기 중</p>
+        </div>
+        <div class="topbar-actions">
+          <a class="button" href="/">대시보드</a>
+          <button id="clearImageResultsButton" class="button" type="button">결과 비우기</button>
+        </div>
+      </header>
+
+      <section class="image-search-grid" aria-label="이미지 검색">
+        <section class="recall-workflow image-search-control">
+          <div class="section-header">
+            <div>
+              <h2>리콜 이미지</h2>
+              <p>
+                <span id="imageRecallLoadedCount">0건</span>
+                <span id="imageRecallFreshness" class="recall-freshness">불러오기 전</span>
+              </p>
+            </div>
+            <span class="section-badge">Lens 우선</span>
+          </div>
+
+          <form id="imageRecallForm" class="image-recall-form compact-recall-form">
+            <label>
+              <span>Recall Hub API 키</span>
+              <input id="imageRecallApiKeyInput" type="password" autocomplete="off" placeholder="비워두면 저장된 키 사용" />
+            </label>
+            <label>
+              <span>조회</span>
+              <select id="imageRecallModeInput">
+                <option value="recent">최근 리콜</option>
+                <option value="list">조건 검색</option>
+              </select>
+            </label>
+            <label>
+              <span>검색어</span>
+              <input id="imageRecallSearchInput" autocomplete="off" placeholder="제품명, 브랜드" />
+            </label>
+            <label>
+              <span>개수</span>
+              <input id="imageRecallLimitInput" type="number" min="1" max="100" value="30" />
+            </label>
+            <button id="loadImageRecallsButton" class="button primary" type="submit">불러오기</button>
+          </form>
+
+          <div class="recall-batch-actions">
+            <button id="batchVisionButton" class="button" type="button">Vision 일괄 분석</button>
+            <span id="batchVisionProgress" class="batch-progress" hidden>대기 중</span>
+          </div>
+
+          <div id="imageRecallList" class="image-recall-list"></div>
+          <div id="imageRecallEmptyState" class="empty-state">이미지 검색할 리콜을 불러오세요.</div>
+
+          <div class="section-divider"></div>
+
+          <section class="lens-candidate-panel" aria-label="Lens 후보 수집">
+            <div class="section-header compact">
+              <div>
+                <h2>Lens 후보 수집</h2>
+                <p>Lens 결과에서 복사한 상품 링크나 텍스트를 붙여넣어 후보를 분류</p>
+              </div>
+              <span id="lensCandidateCount" class="section-badge">0개</span>
+            </div>
+            <label>
+              <span>Lens 결과 링크/텍스트</span>
+              <textarea
+                id="lensCandidateInput"
+                rows="5"
+                placeholder="Google Lens 결과에서 상품 링크 또는 검색 결과 텍스트를 복사해 붙여넣으세요."
+              ></textarea>
+            </label>
+            <div class="form-actions">
+              <button id="collectLensCandidatesButton" class="button primary" type="button">후보 수집</button>
+              <button id="clearLensCandidatesButton" class="button" type="button">후보 비우기</button>
+            </div>
+            <div id="lensCandidateList" class="lens-candidate-list"></div>
+          </section>
+
+          <div class="section-divider"></div>
+
+          <details class="aux-panel">
+            <summary>직접 이미지 URL</summary>
+            <form id="directImageForm" class="direct-image-form">
+              <label>
+                <span>이미지 URL</span>
+                <input id="directImageUrlInput" autocomplete="off" placeholder="https://..." />
+              </label>
+              <label>
+                <span>제품명</span>
+                <input id="directProductInput" autocomplete="off" placeholder="제품명 또는 리콜 제목" />
+              </label>
+              <label>
+                <span>브랜드</span>
+                <input id="directBrandInput" autocomplete="off" placeholder="브랜드, 제조사" />
+              </label>
+              <label>
+                <span>모델명</span>
+                <input id="directModelInput" autocomplete="off" placeholder="모델명" />
+              </label>
+              <div class="form-actions">
+                <button id="directLensButton" class="button primary" type="submit">Google Lens 열기</button>
+                <button id="directImageSearchButton" class="button" type="button">Vision API 보조 분석</button>
+              </div>
+            </form>
+          </details>
+
+          <details class="aux-panel">
+            <summary>Vision 보조 설정</summary>
+            <form id="imageConfigForm" class="image-config-form">
+              <label>
+                <span>Google Vision API 키</span>
+                <input id="visionApiKeyInput" type="password" autocomplete="off" placeholder="비워두면 환경 변수 사용" />
+              </label>
+              <label>
+                <span>최대 결과</span>
+                <input id="imageMaxResultsInput" type="number" min="1" max="50" value="20" />
+              </label>
+              <fieldset class="platform-checks">
+                <legend>대상 플랫폼</legend>
+                <label class="checkbox-field">
+                  <input class="targetPlatformInput" type="checkbox" value="elevenst" checked />
+                  <span>11번가</span>
+                </label>
+                <label class="checkbox-field">
+                  <input class="targetPlatformInput" type="checkbox" value="coupang" checked />
+                  <span>쿠팡</span>
+                </label>
+                <label class="checkbox-field">
+                  <input class="targetPlatformInput" type="checkbox" value="gmarket" checked />
+                  <span>G마켓</span>
+                </label>
+              </fieldset>
+            </form>
+          </details>
+        </section>
+
+        <section class="detail-panel image-search-results" aria-label="이미지 검색 결과">
+          <div id="imageResultPanel" class="image-result-panel">
+            <div class="detail-empty">
+              <p class="empty-title">검색 결과 없음</p>
+              <p class="empty-copy">직접 이미지 URL을 입력하거나 이미지가 있는 리콜을 선택하세요.</p>
+            </div>
+          </div>
+        </section>
+      </section>
+    </div>
+
+    <script src="/assets/image-search.js"></script>
+  </body>
+</html>

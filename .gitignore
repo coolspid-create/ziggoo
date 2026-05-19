@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+results/
+.env
+python-*.exe
+python-install.log
+dashboard-server.log
+dashboard-server.err
+recall_selection_*.json
