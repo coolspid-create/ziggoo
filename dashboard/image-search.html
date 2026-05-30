@@ -58,6 +58,8 @@
 
           <div class="recall-batch-actions">
             <button id="batchVisionButton" class="button" type="button">Vision 일괄 분석</button>
+            <button id="batchProductButton" class="button" type="button">판매처 일괄 검색</button>
+            <button id="cancelBatchButton" class="button" type="button" hidden>취소</button>
             <span id="batchVisionProgress" class="batch-progress" hidden>대기 중</span>
           </div>
 
@@ -113,6 +115,7 @@
               <div class="form-actions">
                 <button id="directLensButton" class="button primary" type="submit">Google Lens 열기</button>
                 <button id="directImageSearchButton" class="button" type="button">Vision API 보조 분석</button>
+                <button id="directProductSearchButton" class="button" type="button">판매처 검색</button>
               </div>
             </form>
           </details>
@@ -141,6 +144,10 @@
                 <label class="checkbox-field">
                   <input class="targetPlatformInput" type="checkbox" value="gmarket" checked />
                   <span>G마켓</span>
+                </label>
+                <label class="checkbox-field">
+                  <input class="targetPlatformInput" type="checkbox" value="naver" checked />
+                  <span>네이버</span>
                 </label>
               </fieldset>
             </form>

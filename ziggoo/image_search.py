@@ -13,7 +13,7 @@ from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 
 import config
-from ziggoo.recall_mapping import clean_text, recall_to_scan_payload
+from ziggoo.recall_mapping import build_search_queries, clean_text, recall_to_scan_payload
 
 
 VISION_ENDPOINT = "https://vision.googleapis.com/v1/images:annotate"
@@ -30,18 +30,21 @@ MARKET_DOMAINS: dict[str, tuple[str, ...]] = {
         "global.gmarket.co.kr",
         "gsearch.gmarket.co.kr",
     ),
+    "naver": ("shopping.naver.com", "smartstore.naver.com"),
 }
 
 MARKET_HOST_KEYWORDS: dict[str, tuple[str, ...]] = {
     "elevenst": ("11st",),
     "coupang": ("coupang",),
     "gmarket": ("gmarket",),
+    "naver": ("naver", "smartstore"),
 }
 
 PLATFORM_LABELS = {
     "elevenst": "11번가",
     "coupang": "쿠팡",
     "gmarket": "G마켓",
+    "naver": "네이버",
 }
 
 RELATED_COMMERCE_DOMAINS: dict[str, tuple[str, ...]] = {
@@ -183,6 +186,8 @@ def _looks_like_product_url(platform: str | None, url: str) -> bool:
         return "/vp/products/" in normalized or "itemid=" in normalized
     if platform == "gmarket":
         return "item.gmarket.co.kr" in normalized or "/item/" in normalized or "goodscode=" in normalized
+    if platform == "naver":
+        return "/products/" in normalized or "/catalog/" in normalized
     return False
 
 
@@ -215,7 +220,7 @@ def _looks_like_related_product_url(platform: str | None, url: str) -> bool:
     return False
 
 
-def find_recall_image_url(recall: dict[str, Any]) -> str:
+def find_recall_image_urls(recall: dict[str, Any]) -> list[str]:
     image_keys = (
         "image_url",
         "image",
@@ -228,23 +233,36 @@ def find_recall_image_url(recall: dict[str, Any]) -> str:
         "image2",
         "thumbnail",
         "thumbnail_url",
+        "main_image_url",
+        "product_image_url",
     )
+    urls: list[str] = []
+
+    def add(value: Any) -> None:
+        text = clean_text(value)
+        if text and text not in urls:
+            urls.append(text)
+
     for key in image_keys:
-        value = clean_text(recall.get(key))
-        if value:
-            return value
+        add(recall.get(key))
 
     images = recall.get("images")
     if isinstance(images, list):
         for image in images:
-            if isinstance(image, str) and clean_text(image):
-                return clean_text(image)
+            if isinstance(image, str):
+                add(image)
             if isinstance(image, dict):
                 for key in image_keys:
-                    value = clean_text(image.get(key))
-                    if value:
-                        return value
-    return ""
+                    before = len(urls)
+                    add(image.get(key))
+                    if len(urls) > before:
+                        break
+    return urls
+
+
+def find_recall_image_url(recall: dict[str, Any]) -> str:
+    urls = find_recall_image_urls(recall)
+    return urls[0] if urls else ""
 
 
 def _recall_terms(recall: dict[str, Any]) -> dict[str, Any]:
@@ -881,38 +899,24 @@ def _collect_similar_candidates(web_detection: dict[str, Any]) -> list[dict[str,
     return list(candidates.values())
 
 
-def run_image_search(
-    recall: dict[str, Any],
-    *,
-    api_key: str = "",
-    image_url: str = "",
-    image_base64: str = "",
-    image_path: str = "",
-    max_results: int = config.IMAGE_SEARCH_MAX_RESULTS,
-    target_platforms: list[str] | None = None,
-) -> dict[str, Any]:
-    api_key = api_key or config.GOOGLE_VISION_API_KEY
-    source_image = image_url or find_recall_image_url(recall)
-    if not source_image and not image_base64 and not image_path:
-        return {
-            "status": "image_no_image",
-            "generated_at": datetime.now().isoformat(timespec="seconds"),
-            "source_image": "",
-            "candidates": [],
-            "message": "리콜 항목에 이미지가 없습니다.",
-        }
+def _status_from_candidates(candidates: list[dict[str, Any]]) -> str:
+    top_score = candidates[0]["score"] if candidates else 0
+    if not candidates:
+        return "image_no_match"
+    if top_score >= config.IMAGE_SEARCH_MATCH_THRESHOLD:
+        return "image_matched"
+    if top_score >= config.IMAGE_SEARCH_CANDIDATE_THRESHOLD:
+        return "image_candidate"
+    return "image_weak"
 
-    web_detection, warnings = call_vision_web_detection(
-        api_key=api_key,
-        image_url=source_image,
-        image_path=image_path,
-        image_base64=image_base64,
-        max_results=max_results,
-    )
-    terms = _recall_terms(recall)
+
+def _score_detection_result(
+    web_detection: dict[str, Any],
+    terms: dict[str, Any],
+    requested_platforms: set[str],
+) -> dict[str, Any]:
     entities = _web_entities(web_detection)
     labels = _best_guess_labels(web_detection)
-    requested_platforms = set(target_platforms or MARKET_DOMAINS)
     candidates = _collect_candidates(web_detection, requested_platforms)
     similar_candidates = _collect_similar_candidates(web_detection)
 
@@ -938,30 +942,203 @@ def run_image_search(
 
     candidates.sort(key=lambda item: item["score"], reverse=True)
     similar_candidates.sort(key=lambda item: item["score"], reverse=True)
-    similar_candidates = similar_candidates[:20]
     diagnostics = _vision_diagnostics(web_detection, requested_platforms, candidates)
-    top_score = candidates[0]["score"] if candidates else 0
-    if not candidates:
-        status = "image_no_match"
-    elif top_score >= config.IMAGE_SEARCH_MATCH_THRESHOLD:
-        status = "image_matched"
-    elif top_score >= config.IMAGE_SEARCH_CANDIDATE_THRESHOLD:
-        status = "image_candidate"
-    else:
-        status = "image_weak"
+    return {
+        "status": _status_from_candidates(candidates),
+        "web_entities": entities[:12],
+        "best_guess_labels": labels,
+        "candidates": candidates,
+        "similar_candidates": similar_candidates[:20],
+        "vision_diagnostics": diagnostics,
+    }
+
+
+def _merge_scored_candidates(groups: list[dict[str, Any]], key: str) -> list[dict[str, Any]]:
+    merged: dict[tuple[str, str], dict[str, Any]] = {}
+    for group in groups:
+        source_image = str(group.get("source_image") or "")
+        for candidate in group.get(key) or []:
+            if not isinstance(candidate, dict):
+                continue
+            merge_key = (
+                str(candidate.get("platform") or ""),
+                str(candidate.get("url") or "").split("#", 1)[0].casefold(),
+            )
+            payload = dict(candidate)
+            payload["image_sources"] = [source_image] if source_image else []
+            existing = merged.get(merge_key)
+            if existing is None or int(payload.get("score") or 0) > int(existing.get("score") or 0):
+                if existing:
+                    payload["image_sources"] = existing.get("image_sources", []) + payload["image_sources"]
+                    payload["matching_images"] = list(
+                        dict.fromkeys((existing.get("matching_images") or []) + (payload.get("matching_images") or []))
+                    )
+                merged[merge_key] = payload
+            else:
+                if source_image and source_image not in existing.setdefault("image_sources", []):
+                    existing["image_sources"].append(source_image)
+                existing["matching_images"] = list(
+                    dict.fromkeys((existing.get("matching_images") or []) + (payload.get("matching_images") or []))
+                )
+    return sorted(merged.values(), key=lambda item: int(item.get("score") or 0), reverse=True)
+
+
+def _merge_entities(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    entities: dict[str, dict[str, Any]] = {}
+    for group in groups:
+        for entity in group.get("web_entities") or []:
+            description = str(entity.get("description") or "").strip()
+            if not description:
+                continue
+            existing = entities.get(description.casefold())
+            if existing is None or float(entity.get("score") or 0) > float(existing.get("score") or 0):
+                entities[description.casefold()] = entity
+    return sorted(entities.values(), key=lambda item: float(item.get("score") or 0), reverse=True)[:12]
+
+
+def _merge_labels(groups: list[dict[str, Any]]) -> list[str]:
+    labels: list[str] = []
+    for group in groups:
+        for label in group.get("best_guess_labels") or []:
+            if label and label not in labels:
+                labels.append(label)
+    return labels[:12]
+
+
+def _merge_diagnostics(groups: list[dict[str, Any]]) -> dict[str, Any]:
+    counts: Counter[str] = Counter()
+    platform_counts: Counter[str] = Counter()
+    platform_image_counts: Counter[str] = Counter()
+    source_counts: Counter[str] = Counter()
+    top_domains: Counter[str] = Counter()
+    sample_urls: list[dict[str, Any]] = []
+    reasons: list[str] = []
+
+    for group in groups:
+        diagnostics = group.get("vision_diagnostics") or {}
+        counts.update(diagnostics.get("counts") or {})
+        platform_counts.update(diagnostics.get("platform_counts") or {})
+        platform_image_counts.update(diagnostics.get("platform_image_counts") or {})
+        source_counts.update(diagnostics.get("source_counts") or {})
+        for domain in diagnostics.get("top_domains") or []:
+            if isinstance(domain, dict) and domain.get("domain"):
+                top_domains[str(domain["domain"])] += int(domain.get("count") or 0)
+        for row in diagnostics.get("sample_urls") or []:
+            if isinstance(row, dict) and row.get("url") and len(sample_urls) < 10:
+                sample_urls.append(row)
+        reason = str(diagnostics.get("reason") or "")
+        if reason and reason not in reasons:
+            reasons.append(reason)
+
+    return {
+        "reason": " / ".join(reasons[:3]) or "검색 단서가 거의 없습니다.",
+        "counts": dict(counts),
+        "platform_counts": dict(platform_counts),
+        "platform_image_counts": dict(platform_image_counts),
+        "source_counts": dict(source_counts),
+        "top_domains": [
+            {"domain": domain, "count": count}
+            for domain, count in top_domains.most_common(8)
+        ],
+        "sample_urls": sample_urls,
+    }
+
+
+def run_image_search(
+    recall: dict[str, Any],
+    *,
+    api_key: str = "",
+    image_url: str = "",
+    image_base64: str = "",
+    image_path: str = "",
+    max_results: int = config.IMAGE_SEARCH_MAX_RESULTS,
+    target_platforms: list[str] | None = None,
+) -> dict[str, Any]:
+    api_key = api_key or config.GOOGLE_VISION_API_KEY
+    source_images = [image_url] if image_url else find_recall_image_urls(recall)
+    if not source_images and not image_base64 and not image_path:
+        return {
+            "status": "image_no_image",
+            "generated_at": datetime.now().isoformat(timespec="seconds"),
+            "source_image": "",
+            "source_images": [],
+            "candidates": [],
+            "similar_candidates": [],
+            "search_queries": build_search_queries(recall),
+            "message": "리콜 항목에 이미지가 없습니다.",
+        }
+
+    terms = _recall_terms(recall)
+    requested_platforms = set(target_platforms or MARKET_DOMAINS)
+    image_results: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    targets = source_images or [image_path or "uploaded-image"]
+
+    for index, source_image in enumerate(targets):
+        try:
+            web_detection, image_warnings = call_vision_web_detection(
+                api_key=api_key,
+                image_url=source_image if source_images else "",
+                image_path=image_path if not source_images else "",
+                image_base64=image_base64 if not source_images else "",
+                max_results=max_results,
+            )
+        except ImageSearchError as exc:
+            if "API 키" in str(exc):
+                raise
+            warnings.append(f"{source_image or image_path or 'uploaded-image'} 분석 실패: {exc}")
+            image_results.append(
+                {
+                    "status": "image_search_error",
+                    "source_image": source_image or image_path or "uploaded-image",
+                    "image_index": index,
+                    "candidates": [],
+                    "similar_candidates": [],
+                    "candidate_count": 0,
+                    "similar_candidate_count": 0,
+                    "web_entities": [],
+                    "best_guess_labels": [],
+                    "vision_diagnostics": {
+                        "reason": str(exc),
+                        "counts": {},
+                        "platform_counts": {},
+                        "platform_image_counts": {},
+                        "source_counts": {},
+                        "top_domains": [],
+                        "sample_urls": [],
+                    },
+                    "error": str(exc),
+                }
+            )
+            continue
+        warnings.extend(image_warnings)
+        scored = _score_detection_result(web_detection, terms, requested_platforms)
+        scored["source_image"] = source_image or image_path or "uploaded-image"
+        scored["image_index"] = index
+        scored["candidate_count"] = len(scored["candidates"])
+        scored["similar_candidate_count"] = len(scored["similar_candidates"])
+        image_results.append(scored)
+
+    candidates = _merge_scored_candidates(image_results, "candidates")
+    similar_candidates = _merge_scored_candidates(image_results, "similar_candidates")[:20]
+    diagnostics = _merge_diagnostics(image_results)
+    status = _status_from_candidates(candidates)
 
     return {
         "status": status,
         "generated_at": datetime.now().isoformat(timespec="seconds"),
-        "source_image": source_image or image_path or "uploaded-image",
+        "source_image": targets[0] if targets else "",
+        "source_images": targets,
         "recall": recall,
         "terms": terms,
-        "web_entities": entities[:12],
-        "best_guess_labels": labels,
+        "search_queries": build_search_queries(recall),
+        "web_entities": _merge_entities(image_results),
+        "best_guess_labels": _merge_labels(image_results),
         "candidates": candidates,
         "candidate_count": len(candidates),
         "similar_candidates": similar_candidates,
         "similar_candidate_count": len(similar_candidates),
         "vision_diagnostics": diagnostics,
+        "image_results": image_results,
         "warnings": warnings,
     }

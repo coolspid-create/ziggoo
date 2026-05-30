@@ -91,6 +91,7 @@ const platformLabels = {
   coupang: "쿠팡",
   elevenst: "11번가 아마존",
   gmarket: "G마켓",
+  naver: "네이버",
 };
 
 const savedApiKey = sessionStorage.getItem("recallHubApiKey");

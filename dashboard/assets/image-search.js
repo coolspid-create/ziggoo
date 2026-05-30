@@ -7,8 +7,12 @@ const state = {
   activeLensContext: null,
   lensCandidates: [],
   isBatchSearching: false,
+  batchCancelRequested: false,
+  batchAbortController: null,
   batchResults: [],
+  productResults: [],
   batchResultTab: "targets",
+  batchStatusFilter: "all",
   selectedRecallKey: "",
 };
 
@@ -25,7 +29,10 @@ const els = {
   directModelInput: document.querySelector("#directModelInput"),
   directLensButton: document.querySelector("#directLensButton"),
   directImageSearchButton: document.querySelector("#directImageSearchButton"),
+  directProductSearchButton: document.querySelector("#directProductSearchButton"),
   batchVisionButton: document.querySelector("#batchVisionButton"),
+  batchProductButton: document.querySelector("#batchProductButton"),
+  cancelBatchButton: document.querySelector("#cancelBatchButton"),
   batchVisionProgress: document.querySelector("#batchVisionProgress"),
   lensCandidateInput: document.querySelector("#lensCandidateInput"),
   collectLensCandidatesButton: document.querySelector("#collectLensCandidatesButton"),
@@ -51,24 +58,31 @@ const statusLabels = {
   image_no_image: "이미지 없음",
   image_search_error: "검색 오류",
   image_weak: "정보 부족",
+  text_matched: "판매 후보",
+  text_candidate: "판매 검토",
+  text_no_match: "판매처 없음",
+  text_no_query: "검색어 없음",
 };
 
 const platformLabels = {
   elevenst: "11번가",
   coupang: "쿠팡",
   gmarket: "G마켓",
+  naver: "네이버",
 };
 
 const marketDomains = {
   elevenst: ["11st.co.kr", "www.11st.co.kr"],
   coupang: ["coupang.com", "www.coupang.com"],
   gmarket: ["gmarket.co.kr", "www.gmarket.co.kr", "item.gmarket.co.kr", "global.gmarket.co.kr", "gsearch.gmarket.co.kr"],
+  naver: ["shopping.naver.com", "smartstore.naver.com"],
 };
 
 const marketHostKeywords = {
   elevenst: ["11st"],
   coupang: ["coupang"],
   gmarket: ["gmarket"],
+  naver: ["naver", "smartstore"],
 };
 
 const commerceDomains = {
@@ -110,7 +124,7 @@ const diagnosticCountLabels = {
   partial_matching_images: "일부 일치 이미지",
   visually_similar_images: "유사 이미지",
   detected_urls: "찾은 링크",
-  target_platform_urls: "11번가/쿠팡/G마켓 링크",
+  target_platform_urls: "11번가/쿠팡/G마켓/네이버 링크",
   target_platform_image_urls: "마켓 이미지 파일",
 };
 
@@ -337,7 +351,7 @@ function cleanUrlCandidate(value) {
 function extractUrlsFromLine(line) {
   const matches = [
     ...(`${line || ""}`.match(/(?:https?:\/\/|www\.)[^\s<>"'`]+/gi) || []),
-    ...(`${line || ""}`.match(/\b(?:[a-z0-9-]+\.)*(?:11st|coupang|gmarket)[a-z0-9.-]*\.[a-z]{2,}[^\s<>"'`]*/gi) || []),
+    ...(`${line || ""}`.match(/\b(?:[a-z0-9-]+\.)*(?:11st|coupang|gmarket|naver|smartstore)[a-z0-9.-]*\.[a-z]{2,}[^\s<>"'`]*/gi) || []),
   ];
   return matches.map(cleanUrlCandidate).filter(Boolean);
 }
@@ -385,6 +399,10 @@ function batchItemForRecall(recall) {
   return state.batchResults.find((item) => item.recall && sameRecall(item.recall, recall)) || null;
 }
 
+function productItemForRecall(recall) {
+  return state.productResults.find((item) => item.recall && sameRecall(item.recall, recall)) || null;
+}
+
 function resultForRecall(recall) {
   const batchItem = batchItemForRecall(recall);
   if (batchItem) return batchItem;
@@ -394,7 +412,30 @@ function resultForRecall(recall) {
   return null;
 }
 
-function recallImageUrl(recall) {
+function upsertProductResult(recall, result = null, error = "") {
+  const key = recallKey(recall);
+  const existingIndex = state.productResults.findIndex((item) => item.recall && recallKey(item.recall) === key);
+  const payload = { recall, product_result: result, product_error: error };
+  if (existingIndex >= 0) {
+    state.productResults.splice(existingIndex, 1, payload);
+  } else {
+    state.productResults.push(payload);
+  }
+}
+
+function batchDisplayItems() {
+  const map = new Map();
+  const ensure = (recall) => {
+    const key = recallKey(recall);
+    if (!map.has(key)) map.set(key, { recall });
+    return map.get(key);
+  };
+  state.batchResults.forEach((item) => Object.assign(ensure(item.recall), item));
+  state.productResults.forEach((item) => Object.assign(ensure(item.recall), item));
+  return Array.from(map.values());
+}
+
+function recallImageUrls(recall) {
   const keys = [
     "image_url",
     "image",
@@ -402,23 +443,39 @@ function recallImageUrl(recall) {
     "image_2",
     "image_3",
     "image_4",
+    "image_5",
+    "image1",
+    "image2",
     "thumbnail",
     "thumbnail_url",
+    "main_image_url",
+    "product_image_url",
   ];
+  const urls = [];
+  const add = (value) => {
+    const text = compactText(value, "");
+    if (text && !urls.includes(text)) urls.push(text);
+  };
   for (const key of keys) {
-    if (compactText(recall[key], "")) return compactText(recall[key], "");
+    add(recall[key]);
   }
   if (Array.isArray(recall.images)) {
     for (const image of recall.images) {
-      if (typeof image === "string" && compactText(image, "")) return compactText(image, "");
+      if (typeof image === "string") add(image);
       if (image && typeof image === "object") {
         for (const key of keys) {
-          if (compactText(image[key], "")) return compactText(image[key], "");
+          const before = urls.length;
+          add(image[key]);
+          if (urls.length > before) break;
         }
       }
     }
   }
-  return "";
+  return urls;
+}
+
+function recallImageUrl(recall) {
+  return recallImageUrls(recall)[0] || "";
 }
 
 function selectedPlatforms() {
@@ -441,13 +498,28 @@ function hasImageRecalls() {
 function applyBusyState() {
   const busy = state.isSearching || state.isBatchSearching;
   els.directImageSearchButton.disabled = busy;
+  if (els.directProductSearchButton) {
+    els.directProductSearchButton.disabled = busy;
+  }
   if (els.batchVisionButton) {
     els.batchVisionButton.disabled = busy || !hasImageRecalls();
+  }
+  if (els.batchProductButton) {
+    els.batchProductButton.disabled = busy || state.recalls.length === 0;
+  }
+  if (els.cancelBatchButton) {
+    els.cancelBatchButton.hidden = !state.isBatchSearching;
+    els.cancelBatchButton.disabled = !state.isBatchSearching;
   }
   document
     .querySelectorAll(".image-recall-search-button")
     .forEach((button) => {
       button.disabled = busy || button.dataset.hasImage !== "true";
+    });
+  document
+    .querySelectorAll(".product-recall-search-button")
+    .forEach((button) => {
+      button.disabled = busy;
     });
 }
 
@@ -465,11 +537,12 @@ function directRecallPayload(imageUrl) {
   };
 }
 
-async function postJson(url, payload) {
+async function postJson(url, payload, options = {}) {
   const response = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
+    signal: options.signal,
   });
   const data = await response.json();
   if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
@@ -483,6 +556,14 @@ function baseImagePayload() {
     vision_api_key: visionKey,
     max_results: Number(els.imageMaxResultsInput.value || 20),
     target_platforms: selectedPlatforms(),
+  };
+}
+
+function baseProductPayload() {
+  return {
+    target_platforms: selectedPlatforms(),
+    max_items: 8,
+    max_queries: 6,
   };
 }
 
@@ -505,6 +586,35 @@ async function runImageSearch(payload, label = "이미지") {
     }
   } catch (error) {
     setStateLabel("이미지 검색 오류", "error");
+    renderError(error.message);
+  } finally {
+    state.activeRecallKey = "";
+    setBusy(false);
+    renderRecalls();
+  }
+}
+
+async function runProductSearch(payload, label = "제품") {
+  if (state.isSearching) return;
+  const recall = payload.recall || directRecallPayload("");
+  setBusy(true);
+  setStateLabel(`${label} 판매처 검색 중...`, "busy");
+  renderLoading(`${label} 판매처`);
+  try {
+    const result = await postJson("/api/product-search", {
+      ...baseProductPayload(),
+      ...payload,
+    });
+    upsertProductResult(recall, result);
+    setStateLabel("판매처 검색 완료", "ready");
+    if (payload.recall && state.selectedRecallKey === recallKey(payload.recall)) {
+      renderRecallDetail(payload.recall);
+    } else {
+      renderProductSearchResult(result);
+    }
+  } catch (error) {
+    upsertProductResult(recall, null, error.message);
+    setStateLabel("판매처 검색 오류", "error");
     renderError(error.message);
   } finally {
     state.activeRecallKey = "";
@@ -560,7 +670,7 @@ function renderLensGuide(imageUrl, recall = {}) {
 
   const guide = makeEl("div", "image-warning");
   guide.append(makeEl("p", "", "우선 Lens 결과가 정상적으로 뜨는지 확인하세요."));
-  guide.append(makeEl("p", "", "Lens 결과에 11번가, 쿠팡, G마켓 상품이 보이는지와 제품명/모델명 비교는 다음 단계에서 자동화합니다."));
+  guide.append(makeEl("p", "", "Lens 결과에 11번가, 쿠팡, G마켓, 네이버 상품이 보이는지와 제품명/모델명 비교를 확인합니다."));
   els.imageResultPanel.append(guide);
 }
 
@@ -868,7 +978,7 @@ function renderCandidates(candidates, diagnostics = null) {
         "empty-copy",
         diagnostics && diagnostics.reason
           ? diagnostics.reason
-          : "Vision이 찾은 링크 안에 11번가, 쿠팡, G마켓이 없습니다."
+          : "Vision이 찾은 링크 안에 11번가, 쿠팡, G마켓, 네이버가 없습니다."
       )
     );
     list.append(empty);
@@ -939,6 +1049,94 @@ function renderSimilarCandidates(candidates) {
   els.imageResultPanel.append(section);
 }
 
+function appendProductCandidate(parent, candidate) {
+  const item = makeEl("div", `image-candidate ${candidate.status || "text_candidate"}`);
+  const row = makeEl("div", "image-candidate-head");
+  row.append(
+    makeEl("strong", "", candidate.platform_label || platformLabels[candidate.platform] || candidate.platform || "판매처"),
+    makeStatusPill(candidate.status || "text_candidate"),
+    makeEl("span", "score-chip", `${candidate.score || 0}점`)
+  );
+  item.append(row);
+  item.append(makeEl("h3", "", compactText(candidate.title, "제목 없음")));
+  const meta = makeEl("div", "detail-meta");
+  if (candidate.query) meta.append(makeEl("span", "meta-chip", `검색어 ${candidate.query}`));
+  if (candidate.price) meta.append(makeEl("span", "meta-chip", candidate.price));
+  item.append(meta);
+  if (candidate.url) {
+    const link = makeEl("a", "detail-link", candidate.url);
+    link.href = candidate.url;
+    link.target = "_blank";
+    link.rel = "noreferrer";
+    item.append(link);
+  }
+  if (Array.isArray(candidate.reasons) && candidate.reasons.length) {
+    const reasons = makeEl("div", "image-reasons");
+    candidate.reasons.slice(0, 4).forEach((reason) => reasons.append(makeEl("span", "meta-chip", reason)));
+    item.append(reasons);
+  }
+  parent.append(item);
+}
+
+function renderProductSearchResult(result) {
+  els.imageResultPanel.replaceChildren();
+  const header = makeEl("div", "detail-header");
+  header.append(makeStatusPill(result.status || "text_no_match"), makeEl("h2", "", "판매처 검색 결과"));
+  const meta = makeEl("div", "detail-meta");
+  meta.append(makeEl("span", "meta-chip", `후보 ${result.candidate_count || 0}개`));
+  if (Array.isArray(result.queries) && result.queries.length) {
+    meta.append(makeEl("span", "meta-chip", `검색어 ${result.queries.length}개`));
+  }
+  if (result.generated_at) meta.append(makeEl("span", "meta-chip", result.generated_at));
+  header.append(meta);
+  els.imageResultPanel.append(header);
+
+  if (Array.isArray(result.queries) && result.queries.length) {
+    const group = makeEl("div", "image-term-group");
+    result.queries.forEach((query) => group.append(makeEl("span", "meta-chip", query)));
+    els.imageResultPanel.append(group);
+  }
+
+  const candidates = Array.isArray(result.candidates) ? result.candidates : [];
+  if (!candidates.length) {
+    const empty = makeEl("div", "detail-empty");
+    empty.append(makeEl("p", "empty-title", "판매 후보 없음"));
+    empty.append(makeEl("p", "empty-copy", "확장 검색어로 대상 쇼핑몰을 검색했지만 후보 상품을 찾지 못했습니다."));
+    els.imageResultPanel.append(empty);
+    return;
+  }
+
+  const list = makeEl("div", "image-candidate-list");
+  candidates.forEach((candidate) => appendProductCandidate(list, candidate));
+  els.imageResultPanel.append(list);
+}
+
+function renderProductSearchResultSection(result) {
+  const section = makeEl("section", "similar-result-section");
+  const header = makeEl("div", "section-header compact");
+  const titleWrap = makeEl("div", "");
+  titleWrap.append(makeEl("h3", "", "판매처 검색 후보"));
+  titleWrap.append(makeEl("p", "", "제품명과 확장 검색어로 대상 쇼핑몰을 직접 검색한 결과"));
+  header.append(titleWrap, makeEl("span", "section-badge", `${result.candidate_count || 0}개`));
+  section.append(header);
+
+  if (Array.isArray(result.queries) && result.queries.length) {
+    const terms = makeEl("div", "image-term-group");
+    result.queries.forEach((query) => terms.append(makeEl("span", "meta-chip", query)));
+    section.append(terms);
+  }
+
+  const candidates = Array.isArray(result.candidates) ? result.candidates : [];
+  if (!candidates.length) {
+    section.append(makeEl("p", "empty-copy", "판매처 검색 후보가 없습니다."));
+  } else {
+    const list = makeEl("div", "image-candidate-list");
+    candidates.slice(0, 12).forEach((candidate) => appendProductCandidate(list, candidate));
+    section.append(list);
+  }
+  els.imageResultPanel.append(section);
+}
+
 function recallMetaItems(recall = {}) {
   const freshness = recallDateInfo(recall);
   return [
@@ -959,7 +1157,10 @@ function renderRecallDetail(recall) {
 
   const searchItem = resultForRecall(recall);
   const result = searchItem?.result || null;
+  const productItem = productItemForRecall(recall);
+  const productResult = productItem?.product_result || null;
   const imageUrl = recallImageUrl(recall);
+  const imageUrls = recallImageUrls(recall);
 
   const header = makeEl("div", "detail-header");
   header.append(
@@ -971,7 +1172,13 @@ function renderRecallDetail(recall) {
   if (result) {
     meta.append(makeEl("span", "meta-chip", `마켓 후보 ${result.candidate_count || 0}개`));
     meta.append(makeEl("span", "meta-chip", `유사 상품 ${result.similar_candidate_count || 0}개`));
+    if (Array.isArray(result.source_images) && result.source_images.length > 1) {
+      meta.append(makeEl("span", "meta-chip", `이미지 ${result.source_images.length}개 분석`));
+    }
     if (result.generated_at) meta.append(makeEl("span", "meta-chip", result.generated_at));
+  }
+  if (productResult) {
+    meta.append(makeEl("span", "meta-chip", `판매처 후보 ${productResult.candidate_count || 0}개`));
   }
   header.append(meta);
   els.imageResultPanel.append(header);
@@ -990,7 +1197,7 @@ function renderRecallDetail(recall) {
     source.append(imageButton);
 
     const sourceInfo = makeEl("div", "");
-    sourceInfo.append(makeEl("strong", "", "리콜 이미지"));
+    sourceInfo.append(makeEl("strong", "", imageUrls.length > 1 ? `리콜 이미지 ${imageUrls.length}개` : "리콜 이미지"));
     const link = makeEl("a", "detail-link", imageUrl);
     link.href = imageUrl;
     link.target = "_blank";
@@ -1012,6 +1219,12 @@ function renderRecallDetail(recall) {
   searchButton.disabled = state.isSearching || state.isBatchSearching || !imageUrl;
   searchButton.addEventListener("click", () => runImageSearch({ recall }, compactText(recall.display_title, "리콜 이미지")));
   actions.append(searchButton);
+
+  const productButton = makeEl("button", "button", "판매처 검색");
+  productButton.type = "button";
+  productButton.disabled = state.isSearching || state.isBatchSearching;
+  productButton.addEventListener("click", () => runProductSearch({ recall }, compactText(recall.display_title, "리콜 제품")));
+  actions.append(productButton);
   els.imageResultPanel.append(actions);
 
   if (searchItem?.error) {
@@ -1023,19 +1236,29 @@ function renderRecallDetail(recall) {
     return;
   }
 
-  if (!result) {
+  if (!result && !productResult && !productItem?.product_error) {
     const empty = makeEl("div", "detail-empty");
     empty.append(makeEl("p", "empty-title", "아직 검색 결과 없음"));
-    empty.append(makeEl("p", "empty-copy", "Vision 일괄 분석을 실행했거나 이 제품을 개별 분석했다면 여기에서 결과를 볼 수 있습니다."));
+    empty.append(makeEl("p", "empty-copy", "Vision 분석이나 판매처 검색을 실행하면 여기에서 결과를 볼 수 있습니다."));
     els.imageResultPanel.append(empty);
     renderRecalls();
     return;
   }
 
-  renderTermSummary(result);
-  renderVisionDiagnostics(result.vision_diagnostics);
-  renderCandidates(result.candidates || [], result.vision_diagnostics);
-  renderSimilarCandidates(result.similar_candidates || []);
+  if (result) {
+    renderTermSummary(result);
+    renderVisionDiagnostics(result.vision_diagnostics);
+    renderCandidates(result.candidates || [], result.vision_diagnostics);
+    renderSimilarCandidates(result.similar_candidates || []);
+  }
+  if (productItem?.product_error) {
+    const warning = makeEl("div", "image-warning");
+    warning.append(makeEl("p", "", `판매처 검색 실패: ${productItem.product_error}`));
+    els.imageResultPanel.append(warning);
+  }
+  if (productResult) {
+    renderProductSearchResultSection(productResult);
+  }
   renderRecalls();
 }
 
@@ -1045,11 +1268,12 @@ function setBatchProgress(text, hidden = false) {
   els.batchVisionProgress.textContent = text;
 }
 
-function renderBatchResultTabs({ inProgress = false, completed = 0, total = 0, targetTotal = 0, similarTotal = 0 } = {}) {
+function renderBatchResultTabs({ inProgress = false, completed = 0, total = 0, targetTotal = 0, similarTotal = 0, productTotal = 0 } = {}) {
   const tabs = makeEl("div", "batch-result-tabs");
   [
     ["targets", `대상 마켓 ${targetTotal}`],
     ["similar", `유사 상품 ${similarTotal}`],
+    ["products", `판매처 ${productTotal}`],
   ].forEach(([tabId, label]) => {
     const button = makeEl("button", `batch-result-tab ${state.batchResultTab === tabId ? "active" : ""}`, label);
     button.type = "button";
@@ -1061,6 +1285,30 @@ function renderBatchResultTabs({ inProgress = false, completed = 0, total = 0, t
     tabs.append(button);
   });
   return tabs;
+}
+
+function renderBatchFilterControls({ inProgress = false, completed = 0, total = 0 } = {}) {
+  const row = makeEl("div", "batch-filter-row");
+  const label = makeEl("label", "batch-filter-field");
+  label.append(makeEl("span", "", "표시"));
+  const select = document.createElement("select");
+  [
+    ["all", "전체"],
+    ["matched", "후보 있음"],
+    ["no_market", "마켓 없음"],
+    ["errors", "오류"],
+  ].forEach(([value, text]) => {
+    const option = new Option(text, value);
+    select.append(option);
+  });
+  select.value = state.batchStatusFilter;
+  select.addEventListener("change", () => {
+    state.batchStatusFilter = select.value;
+    renderBatchVisionResults({ inProgress, completed, total });
+  });
+  label.append(select);
+  row.append(label);
+  return row;
 }
 
 function appendSimilarCandidate(parent, candidate) {
@@ -1133,7 +1381,7 @@ function appendSimilarCandidate(parent, candidate) {
 
 function renderBatchVisionResults({ inProgress = false, completed = 0, total = 0 } = {}) {
   els.imageResultPanel.replaceChildren();
-  const results = state.batchResults;
+  const results = batchDisplayItems();
   const statusCounts = results.reduce((counts, item) => {
     const status = item.error ? "error" : item.result?.status || "unknown";
     counts[status] = (counts[status] || 0) + 1;
@@ -1141,6 +1389,7 @@ function renderBatchVisionResults({ inProgress = false, completed = 0, total = 0
   }, {});
   const targetTotal = results.reduce((sum, item) => sum + Number(item.result?.candidate_count || 0), 0);
   const similarTotal = results.reduce((sum, item) => sum + Number(item.result?.similar_candidate_count || 0), 0);
+  const productTotal = results.reduce((sum, item) => sum + Number(item.product_result?.candidate_count || 0), 0);
 
   const header = makeEl("div", "detail-header");
   header.append(makeEl("span", "status-pill image_candidate", "Vision 일괄"));
@@ -1152,9 +1401,11 @@ function renderBatchVisionResults({ inProgress = false, completed = 0, total = 0
   meta.append(makeEl("span", "meta-chip", `정보 부족 ${statusCounts.image_weak || 0}`));
   meta.append(makeEl("span", "meta-chip", `마켓 없음 ${statusCounts.image_no_match || 0}`));
   meta.append(makeEl("span", "meta-chip", `유사 상품 ${similarTotal}`));
+  meta.append(makeEl("span", "meta-chip", `판매처 ${productTotal}`));
   meta.append(makeEl("span", "meta-chip", `오류 ${statusCounts.error || 0}`));
   header.append(meta);
-  header.append(renderBatchResultTabs({ inProgress, completed, total, targetTotal, similarTotal }));
+  header.append(renderBatchResultTabs({ inProgress, completed, total, targetTotal, similarTotal, productTotal }));
+  header.append(renderBatchFilterControls({ inProgress, completed, total }));
   els.imageResultPanel.append(header);
 
   if (!results.length) {
@@ -1165,18 +1416,49 @@ function renderBatchVisionResults({ inProgress = false, completed = 0, total = 0
     return;
   }
 
+  const filteredResults = results.filter((item) => {
+    if (state.batchStatusFilter === "all") return true;
+    if (state.batchStatusFilter === "errors") return Boolean(item.error || item.product_error);
+    if (state.batchStatusFilter === "matched") {
+      return Boolean(
+        Number(item.result?.candidate_count || 0) > 0
+          || Number(item.result?.similar_candidate_count || 0) > 0
+          || Number(item.product_result?.candidate_count || 0) > 0
+      );
+    }
+    if (state.batchStatusFilter === "no_market") {
+      return !item.error && !item.product_error
+        && Number(item.result?.candidate_count || 0) === 0
+        && Number(item.result?.similar_candidate_count || 0) === 0
+        && Number(item.product_result?.candidate_count || 0) === 0;
+    }
+    return true;
+  });
+
   const list = makeEl("div", "image-candidate-list");
-  results.forEach((item) => {
+  filteredResults.forEach((item) => {
     const result = item.result || {};
-    const card = makeEl("article", `image-candidate ${item.error ? "image_search_error" : result.status || ""}`);
+    const productResult = item.product_result || {};
+    const card = makeEl("article", `image-candidate ${item.error || item.product_error ? "image_search_error" : result.status || productResult.status || ""}`);
     const row = makeEl("div", "image-candidate-head");
     row.append(
       makeEl("strong", "", compactText(item.recall.display_title, "이름 없는 리콜")),
-      item.error ? makeEl("span", "status-pill image_search_error", "오류") : makeStatusPill(result.status || "unknown")
+      item.error || item.product_error ? makeEl("span", "status-pill image_search_error", "오류") : makeStatusPill(result.status || productResult.status || "unknown")
     );
     card.append(row);
 
-    if (state.batchResultTab === "similar") {
+    if (state.batchResultTab === "products") {
+      const productCandidates = Array.isArray(productResult.candidates) ? productResult.candidates : [];
+      if (productCandidates.length) {
+        card.append(makeEl("p", "diagnostic-reason", `판매처 후보 ${productCandidates.length}개`));
+        productCandidates.slice(0, 4).forEach((candidate) => appendProductCandidate(card, candidate));
+      } else {
+        const message = item.product_error || (Array.isArray(productResult.queries) && productResult.queries.length
+          ? "판매처 검색 후보가 없습니다."
+          : "판매처 검색을 실행하지 않았습니다.");
+        card.append(makeEl("p", "empty-copy", message));
+      }
+    } else if (state.batchResultTab === "similar") {
       const similarCandidates = Array.isArray(result.similar_candidates) ? result.similar_candidates : [];
       if (similarCandidates.length) {
         card.append(makeEl("p", "diagnostic-reason", `유사 상품 ${similarCandidates.length}개`));
@@ -1205,6 +1487,9 @@ function renderBatchVisionResults({ inProgress = false, completed = 0, total = 0
     }
     list.append(card);
   });
+  if (!filteredResults.length) {
+    list.append(makeEl("p", "empty-copy", "현재 필터에 해당하는 결과가 없습니다."));
+  }
   els.imageResultPanel.append(list);
 }
 
@@ -1218,7 +1503,10 @@ async function runBatchVisionAnalysis() {
 
   state.batchResults = [];
   state.batchResultTab = "targets";
+  state.batchStatusFilter = "all";
   state.isBatchSearching = true;
+  state.batchCancelRequested = false;
+  state.batchAbortController = new AbortController();
   applyBusyState();
   renderRecalls();
   setStateLabel("Vision 일괄 분석 중", "busy");
@@ -1227,15 +1515,20 @@ async function runBatchVisionAnalysis() {
 
   const basePayload = baseImagePayload();
   for (let index = 0; index < recallsWithImages.length; index += 1) {
+    if (state.batchCancelRequested) break;
     const recall = recallsWithImages[index];
     const completed = index + 1;
     try {
       const result = await postJson("/api/image-search", {
         ...basePayload,
         recall,
-      });
+      }, { signal: state.batchAbortController?.signal });
       state.batchResults.push({ recall, result });
     } catch (error) {
+      if (error.name === "AbortError") {
+        state.batchResults.push({ recall, error: "사용자가 일괄 분석을 취소했습니다." });
+        break;
+      }
       state.batchResults.push({ recall, error: error.message });
     }
     setBatchProgress(`${completed} / ${recallsWithImages.length}`);
@@ -1244,11 +1537,72 @@ async function runBatchVisionAnalysis() {
   }
 
   state.isBatchSearching = false;
+  state.batchAbortController = null;
   applyBusyState();
   renderRecalls();
-  setStateLabel("Vision 일괄 분석 완료", "ready");
-  setBatchProgress(`${state.batchResults.length}개 완료`);
+  setStateLabel(state.batchCancelRequested ? "Vision 일괄 분석 취소" : "Vision 일괄 분석 완료", state.batchCancelRequested ? "error" : "ready");
+  setBatchProgress(`${state.batchResults.length}개 ${state.batchCancelRequested ? "취소" : "완료"}`);
   renderBatchVisionResults({ inProgress: false, completed: state.batchResults.length, total: recallsWithImages.length });
+}
+
+async function runBatchProductSearch() {
+  if (state.isSearching || state.isBatchSearching) return;
+  if (!state.recalls.length) {
+    renderError("리콜을 먼저 불러오세요.");
+    return;
+  }
+
+  state.productResults = [];
+  state.batchResultTab = "products";
+  state.batchStatusFilter = "all";
+  state.isBatchSearching = true;
+  state.batchCancelRequested = false;
+  state.batchAbortController = new AbortController();
+  applyBusyState();
+  renderRecalls();
+  setStateLabel("판매처 일괄 검색 중", "busy");
+  setBatchProgress(`0 / ${state.recalls.length}`);
+  renderBatchVisionResults({ inProgress: true, completed: 0, total: state.recalls.length });
+
+  const basePayload = baseProductPayload();
+  for (let index = 0; index < state.recalls.length; index += 1) {
+    if (state.batchCancelRequested) break;
+    const recall = state.recalls[index];
+    const completed = index + 1;
+    try {
+      const result = await postJson("/api/product-search", {
+        ...basePayload,
+        recall,
+      }, { signal: state.batchAbortController?.signal });
+      upsertProductResult(recall, result);
+    } catch (error) {
+      if (error.name === "AbortError") {
+        upsertProductResult(recall, null, "사용자가 일괄 검색을 취소했습니다.");
+        break;
+      }
+      upsertProductResult(recall, null, error.message);
+    }
+    setBatchProgress(`${completed} / ${state.recalls.length}`);
+    setStateLabel(`판매처 일괄 검색 ${completed}/${state.recalls.length}`, "busy");
+    renderBatchVisionResults({ inProgress: completed < state.recalls.length, completed, total: state.recalls.length });
+  }
+
+  state.isBatchSearching = false;
+  state.batchAbortController = null;
+  applyBusyState();
+  renderRecalls();
+  setStateLabel(state.batchCancelRequested ? "판매처 일괄 검색 취소" : "판매처 일괄 검색 완료", state.batchCancelRequested ? "error" : "ready");
+  setBatchProgress(`${state.productResults.length}개 ${state.batchCancelRequested ? "취소" : "완료"}`);
+  renderBatchVisionResults({ inProgress: false, completed: state.productResults.length, total: state.recalls.length });
+}
+
+function cancelBatchWork() {
+  if (!state.isBatchSearching) return;
+  state.batchCancelRequested = true;
+  state.batchAbortController?.abort();
+  setStateLabel("일괄 작업 취소 중", "error");
+  setBatchProgress("취소 중");
+  applyBusyState();
 }
 
 async function loadImageRecalls(event) {
@@ -1284,6 +1638,7 @@ function renderRecalls() {
   state.recalls.forEach((recall) => {
     const key = recallKey(recall);
     const imageUrl = recallImageUrl(recall);
+    const imageUrls = recallImageUrls(recall);
     const isSelected = state.selectedRecallKey === key || state.activeRecallKey === key;
     const card = makeEl("article", `image-recall-card ${isSelected ? "selected" : ""}`);
 
@@ -1318,6 +1673,7 @@ function renderRecalls() {
     content.append(makeEl("h3", "", compactText(recall.display_title, "이름 없는 리콜")));
     const meta = makeEl("div", "recall-meta");
     recallMetaItems(recall).forEach((item) => meta.append(makeEl("span", "meta-chip", item)));
+    if (imageUrls.length > 1) meta.append(makeEl("span", "meta-chip", `이미지 ${imageUrls.length}`));
     content.append(meta);
 
     const actions = makeEl("div", "form-actions compact-actions");
@@ -1354,6 +1710,21 @@ function renderRecalls() {
       runImageSearch({ recall }, compactText(recall.display_title, "리콜 이미지"));
     });
     actions.append(button);
+
+    const productButton = makeEl(
+      "button",
+      "button small product-recall-search-button",
+      state.activeRecallKey === key && state.isSearching ? "검색 중" : "판매처 검색"
+    );
+    productButton.type = "button";
+    productButton.disabled = state.isSearching || state.isBatchSearching;
+    productButton.addEventListener("click", () => {
+      state.activeRecallKey = key;
+      state.selectedRecallKey = key;
+      renderRecalls();
+      runProductSearch({ recall }, compactText(recall.display_title, "리콜 제품"));
+    });
+    actions.append(productButton);
     content.append(actions);
     card.append(content);
     els.imageRecallList.append(card);
@@ -1386,7 +1757,18 @@ els.directImageSearchButton.addEventListener("click", () => {
   );
 });
 
+els.directProductSearchButton?.addEventListener("click", () => {
+  const recall = directRecallPayload(els.directImageUrlInput.value.trim());
+  if (!compactText(recall.product_name, "") && !compactText(recall.brand_name, "") && !compactText(recall.model_name, "")) {
+    els.directProductInput.focus();
+    return;
+  }
+  runProductSearch({ recall }, "직접 입력 제품");
+});
+
 els.batchVisionButton?.addEventListener("click", runBatchVisionAnalysis);
+els.batchProductButton?.addEventListener("click", runBatchProductSearch);
+els.cancelBatchButton?.addEventListener("click", cancelBatchWork);
 els.collectLensCandidatesButton?.addEventListener("click", collectLensCandidates);
 els.clearLensCandidatesButton?.addEventListener("click", () => {
   state.lensCandidates = [];
@@ -1397,6 +1779,8 @@ els.clearLensCandidatesButton?.addEventListener("click", () => {
 els.imageRecallForm.addEventListener("submit", loadImageRecalls);
 els.clearImageResultsButton.addEventListener("click", () => {
   state.lastResult = null;
+  state.batchResults = [];
+  state.productResults = [];
   state.activeRecallKey = "";
   state.selectedRecallKey = "";
   els.imageResultPanel.replaceChildren();

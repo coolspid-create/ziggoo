@@ -20,6 +20,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 import config
 from ziggoo.image_search import ImageSearchError, run_image_search
+from ziggoo.product_search import run_product_search
 from ziggoo.recall_api import RecallApiClient
 from ziggoo.recall_mapping import enrich_recall, recall_to_scan_payload
 
@@ -450,6 +451,9 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             return
         if parsed.path == "/api/image-search":
             self._handle_image_search()
+            return
+        if parsed.path == "/api/product-search":
+            self._handle_product_search()
             return
         self.send_error(HTTPStatus.NOT_FOUND, "Not found")
 
@@ -893,6 +897,49 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             result["saved_path"] = str(saved_path.resolve())
         except Exception as exc:
             result["save_error"] = str(exc)
+
+        self._send_json(result)
+
+    def _handle_product_search(self) -> None:
+        payload = self._read_json_body()
+        if payload is None:
+            self._send_json({"error": "Invalid JSON body."}, HTTPStatus.BAD_REQUEST)
+            return
+
+        recall = payload.get("recall") if isinstance(payload.get("recall"), dict) else {}
+        if not recall:
+            recall = {
+                key: value
+                for key, value in {
+                    "query": payload.get("query"),
+                    "verify": payload.get("verify"),
+                    "brand_name": payload.get("brand_name"),
+                    "model_name": payload.get("model_name"),
+                    "product_name": payload.get("product_name"),
+                }.items()
+                if value
+            }
+        if not recall:
+            self._send_json({"error": "검색할 제품 정보가 필요합니다."}, HTTPStatus.BAD_REQUEST)
+            return
+
+        target_platforms = payload.get("target_platforms")
+        if not isinstance(target_platforms, list):
+            target_platforms = None
+
+        try:
+            result = run_product_search(
+                recall,
+                target_platforms=[str(platform) for platform in target_platforms] if target_platforms else None,
+                max_items=int(payload.get("max_items") or 8),
+                max_queries=int(payload.get("max_queries") or 6),
+            )
+        except Exception as exc:
+            self._send_json(
+                {"error": f"Product search failed: {exc}"},
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+            )
+            return
 
         self._send_json(result)
 

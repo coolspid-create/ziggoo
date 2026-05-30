@@ -16,6 +16,10 @@
   box-sizing: border-box;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 body {
   margin: 0;
   min-width: 320px;
@@ -803,6 +807,18 @@ tbody tr:last-child td {
   color: var(--red);
 }
 
+.status-pill.text_matched,
+.status-pill.text_candidate {
+  border-color: #9bcab8;
+  color: var(--green);
+}
+
+.status-pill.text_no_match,
+.status-pill.text_no_query {
+  border-color: #cad1d8;
+  color: #52606c;
+}
+
 .muted {
   color: var(--muted);
 }
@@ -881,6 +897,29 @@ tbody tr:last-child td {
   border-color: #2f6f9f;
   background: #eef7fc;
   color: #1f5f8b;
+}
+
+.batch-filter-row {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.batch-filter-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-weight: 900;
+}
+
+.batch-filter-field select {
+  min-height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px 28px 6px 10px;
+  background: #ffffff;
+  font: inherit;
+  font-weight: 800;
 }
 
 .meta-chip {
@@ -1318,6 +1357,11 @@ tbody tr:last-child td {
 
 .image-candidate.image_candidate {
   border-color: #e0bd73;
+}
+
+.image-candidate.text_matched,
+.image-candidate.text_candidate {
+  border-color: #9bcab8;
 }
 
 .image-candidate-head {

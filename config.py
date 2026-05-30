@@ -64,6 +64,7 @@ GMARKET_GLOBAL_SEARCH_URL = (
     "IsGlobalSearch=undefined&IsGmarketBest=False&IsGmileage=False&IsGstamp=False&"
     "IsOversea=True&keyword={query}&ordertype=&page=1&pagesize=60&type=LIST"
 )
+NAVER_SEARCH_URL = "https://search.shopping.naver.com/search/all?query={query}"
 
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
